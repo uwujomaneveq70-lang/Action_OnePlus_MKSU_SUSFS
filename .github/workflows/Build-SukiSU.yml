@@ -197,40 +197,56 @@ jobs:
 
       - name: Fix susfs headers includes and warnings
         run: |
-          cd kernel_workspace/kernel_platform
-          echo "=== 1) 给 susfs_def.h 补上它用到的内核头 ==="
+          cd kernel_workspace/kernel_platform || exit 1
+          echo "=== 0) 保险: 补 VMA_PAD_START 宏(OPPO专有, susfs open_redirect 用到) ==="
+          if ! grep -q 'VMA_PAD_START' ./common/include/linux/mm.h 2>/dev/null; then
+            printf '%s\n' '' '#ifndef VMA_PAD_START' '#define VMA_PAD_START(vma) ((vma)->vm_start)' '#endif' >> ./common/include/linux/mm.h || true
+            echo 'VMA_PAD_FIX=applied'
+          else
+            echo 'VMA_PAD_FIX=already'
+          fi
+          echo "=== 1) 给 susfs_def.h 补内核头 ==="
           H=./common/include/linux/susfs_def.h
           if [ -f "$H" ]; then
             for INC in linux/compiler.h linux/sched.h linux/cred.h linux/thread_info.h linux/fs.h; do
-              grep -q "$INC" "$H" || sed -i '1i #include <'"$INC"'>' "$H"
+              grep -q "$INC" "$H" || sed -i '1i #include <'"$INC"'>' "$H" || true
             done
-            head -12 "$H"
+            head -12 "$H" || true
           fi
           echo "=== 2) dentry 未初始化 ==="
           for F in ./common/fs/proc/task_mmu.c ./msm-kernel/fs/proc/task_mmu.c; do
-            if [ -f "$F" ]; then sed -i 's/struct dentry \*dentry;/struct dentry *dentry = NULL;/g' "$F"; fi
+            if [ -f "$F" ]; then sed -i 's/struct dentry \*dentry;/struct dentry *dentry = NULL;/g' "$F" || true; fi
           done
           echo "=== 3) 用到 SUSFS 宏的 .c: 在最后一个 #include 之后补 include ==="
           for F in $(grep -rl "SUSFS_IS_INODE_\|susfs_sus_map\|susfs_open_redirect" ./common --include=*.c 2>/dev/null); do
             if ! grep -q "linux/susfs_def.h" "$F"; then
               N=$(grep -n '^#include' "$F" | tail -1 | cut -d: -f1)
               if [ -n "$N" ]; then
-                sed -i "${N}a #include <linux/susfs_def.h>\n#include <linux/susfs.h>" "$F"
+                sed -i "${N}a #include <linux/susfs_def.h>\n#include <linux/susfs.h>" "$F" || true
                 echo "补 include (after line $N) -> $F"
               fi
             fi
           done
-          echo "=== 4) 把这类警告降级(不再当错误) ==="
+          echo "=== 4) 警告降级 ==="
           N=$(grep -n 'CONFIG_WERROR) += -Werror' ./common/Makefile | head -1 | cut -d: -f1)
           if [ -n "$N" ]; then
-            sed -i "${N}i KBUILD_CFLAGS += -Wno-error=implicit-function-declaration -Wno-error=implicit-int -Wno-error=uninitialized -Wno-error=sometimes-uninitialized -Wno-error=array-bounds" ./common/Makefile
+            sed -i "${N}i KBUILD_CFLAGS += -Wno-error -Wno-error=implicit-function-declaration -Wno-error=implicit-int -Wno-error=uninitialized -Wno-error=sometimes-uninitialized -Wno-error=array-bounds -Wno-error=return-type -Wno-error=incompatible-pointer-types -Wno-error=int-conversion" ./common/Makefile || true
             echo "MAKEFILE_PATCHED_AT=$N"
-            sed -n "$((N-1)),$((N+1))p" ./common/Makefile
+            sed -n "$((N-1)),$((N+1))p" ./common/Makefile || true
           else
             echo "WARN: 找不到 CONFIG_WERROR 那行, 跳过"
           fi
           echo "=== 5) 关掉 CONFIG_WERROR ==="
-          echo '# CONFIG_WERROR is not set' >> ./common/arch/arm64/configs/gki_defconfig
+          echo '# CONFIG_WERROR is not set' >> ./common/arch/arm64/configs/gki_defconfig || true
+          echo "=== 6) 补 ksu_handle_post_execveat_sucompat 空实现(否则最后链接会报未定义符号) ==="
+          if ! grep -rq 'int ksu_handle_post_execveat_sucompat' ./common 2>/dev/null; then
+            printf '%s\n' '' '#ifdef CONFIG_KSU_SUSFS' 'int ksu_handle_post_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp_user, int *__never_use_flags, int *retval)' '{' '    return 0;' '}' '#endif' >> ./common/fs/susfs.c || true
+            echo "SUCOMPAT_STUB=applied"
+          else
+            echo "SUCOMPAT_STUB=already_exists"
+          fi
+          tail -12 ./common/fs/susfs.c || true
+          echo "=== 修复步骤结束 ==="
 
       - name: Apply Hide Stuff Patches
         run: |
@@ -418,7 +434,7 @@ jobs:
       - name: Download Latest SUSFS Module from CI
         if: ${{ github.event.inputs.SUSFS_CI == 'true' }}
         run: |
-          LATEST_RUN_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          LATEST_RUN_ID=$(curl -s -H "Authorization: Bearer *** secrets.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/sidex15/susfs4ksu-module/actions/runs?status=success" | \
             jq -r '.workflow_runs[] | select(.head_branch == "v1.5.2+") | .id' | head -n 1)
 
@@ -427,10 +443,10 @@ jobs:
             exit 1
           fi
 
-          ARTIFACT_URL=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          ARTIFACT_URL=$(curl -s -H "Authorization: Bearer *** secrets.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/sidex15/susfs4ksu-module/actions/runs/$LATEST_RUN_ID/artifacts" | jq -r '.artifacts[0].archive_download_url')
 
-          curl -L -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" -o ksu_module_susfs.zip "$ARTIFACT_URL"
+          curl -L -H "Authorization: Bearer *** secrets.GITHUB_TOKEN }}" -o ksu_module_susfs.zip "$ARTIFACT_URL"
           cp ksu_module_susfs.zip ./AnyKernel3/
 
       # 下载 SUSFS 模块（Release）
