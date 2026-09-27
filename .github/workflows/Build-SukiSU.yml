@@ -198,6 +198,16 @@ jobs:
       - name: Fix susfs headers includes and warnings
         run: |
           cd kernel_workspace/kernel_platform || exit 1
+          echo "=== -1) 应用官方集成补丁 10_enable_susfs_for_ksu.patch (Action 漏掉了它) ==="
+          if [ -f ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ]; then
+            cp ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/ || true
+            if [ -d ./KernelSU ]; then
+              ( cd ./KernelSU && patch -p1 -F 3 < 10_enable_susfs_for_ksu.patch ) || true
+              echo "PATCH10_DONE"
+            fi
+          else
+            echo "PATCH10=not_found"
+          fi
           echo "=== 0) 保险: 补 VMA_PAD_START 宏(OPPO专有, susfs open_redirect 用到) ==="
           if ! grep -q 'VMA_PAD_START' ./common/include/linux/mm.h 2>/dev/null; then
             printf '%s\n' '' '#ifndef VMA_PAD_START' '#define VMA_PAD_START(vma) ((vma)->vm_start)' '#endif' >> ./common/include/linux/mm.h || true
@@ -238,14 +248,13 @@ jobs:
           fi
           echo "=== 5) 关掉 CONFIG_WERROR ==="
           echo '# CONFIG_WERROR is not set' >> ./common/arch/arm64/configs/gki_defconfig || true
-          echo "=== 6) 补 ksu_handle_post_execveat_sucompat 空实现(否则最后链接会报未定义符号) ==="
-          if ! grep -rq 'int ksu_handle_post_execveat_sucompat' ./common 2>/dev/null; then
+          echo "=== 6) 空实现兜底(若上面补丁成功则自动跳过) ==="
+          if ! grep -rq 'int ksu_handle_post_execveat_sucompat' ./common ./KernelSU 2>/dev/null; then
             printf '%s\n' '' '#ifdef CONFIG_KSU_SUSFS' 'int ksu_handle_post_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp_user, int *__never_use_flags, int *retval)' '{' '    return 0;' '}' '#endif' >> ./common/fs/susfs.c || true
             echo "SUCOMPAT_STUB=applied"
           else
-            echo "SUCOMPAT_STUB=already_exists"
+            echo "SUCOMPAT_STUB=skipped(补丁已提供)"
           fi
-          tail -12 ./common/fs/susfs.c || true
           echo "=== 修复步骤结束 ==="
 
       - name: Apply Hide Stuff Patches
@@ -351,14 +360,35 @@ jobs:
       - name: Build kernel
         if: ${{ github.event.inputs.CPU == 'sm8650' || github.event.inputs.CPU == 'sm7675' }}
         run: |
+          set -o pipefail
           cd kernel_workspace
-          ./kernel_platform/build_with_bazel.py -t ${{ github.event.inputs.CPUD }} ${{ github.event.inputs.BUILD_METHOD }}
+          ./kernel_platform/build_with_bazel.py -t ${{ github.event.inputs.CPUD }} ${{ github.event.inputs.BUILD_METHOD }} 2>&1 | tee $GITHUB_WORKSPACE/build_log.txt
           
       - name: Fallback build kernel
         if: ${{ github.event.inputs.CPU != 'sm8650' && github.event.inputs.CPU != 'sm7675' }}
         run: |
          cd kernel_workspace
          LTO=thin SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 ./kernel_platform/oplus/build/oplus_build_kernel.sh ${{ github.event.inputs.CPUD }} ${{ github.event.inputs.BUILD_METHOD }}
+
+      - name: publish-build-log
+        if: always()
+        continue-on-error: true
+        run: |
+          cd $GITHUB_WORKSPACE
+          {
+            echo "### 关键检查 ###"
+            echo "-- KernelSU 里的 sucompat hook --"
+            grep -rn "ksu_handle_post_execveat_sucompat" kernel_workspace/kernel_platform/KernelSU 2>/dev/null | head -5 || true
+            echo "-- common/fs/susfs.c 尾部 --"
+            tail -14 kernel_workspace/kernel_platform/common/fs/susfs.c 2>&1 || true
+            echo "-- 构建日志尾部 4000 行 --"
+            tail -4000 build_log.txt 2>/dev/null || echo "(没有 build_log.txt)"
+          } > build_log_small.txt 2>&1
+          git config user.name diag
+          git config user.email diag@example.com
+          git add -f build_log_small.txt || true
+          git commit -m "build log" || true
+          git push || true
 
       - name: Make AnyKernel3
         run: |
@@ -470,6 +500,7 @@ jobs:
           echo "value=$clean_feil" >> $GITHUB_OUTPUT
 
       - name: Upload AnyKernel3
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: AnyKernel3_SukiSUUltra_${{ env.KSUVER }}_${{ steps.feil_clean.outputs.value }}${{ steps.suffix.outputs.value }}
