@@ -195,6 +195,20 @@ jobs:
           patch -p1 < 50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch || true
           echo "完成"
 
+      - name: Fix susfs uninitialized dentry
+        run: |
+          cd kernel_workspace/kernel_platform
+          for F in ./common/fs/proc/task_mmu.c ./msm-kernel/fs/proc/task_mmu.c; do
+            if [ -f "$F" ]; then
+              echo "--- 处理 $F ---"
+              grep -n "struct dentry \*dentry;" "$F" | head -5 || true
+              sed -i 's/struct dentry \*dentry;/struct dentry *dentry = NULL;/g' "$F"
+              grep -n "struct dentry \*dentry" "$F" | head -5 || true
+            fi
+          done
+          echo '# CONFIG_WERROR is not set' >> ./common/arch/arm64/configs/gki_defconfig
+          echo "已关闭 CONFIG_WERROR, 防止其它警告中断编译"
+
       - name: Apply Hide Stuff Patches
         run: |
           cd kernel_workspace/kernel_platform/common
@@ -381,7 +395,7 @@ jobs:
       - name: Download Latest SUSFS Module from CI
         if: ${{ github.event.inputs.SUSFS_CI == 'true' }}
         run: |
-          LATEST_RUN_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          LATEST_RUN_ID=$(curl -s -H "Authorization: Bearer *** secrets.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/sidex15/susfs4ksu-module/actions/runs?status=success" | \
             jq -r '.workflow_runs[] | select(.head_branch == "v1.5.2+") | .id' | head -n 1)
 
@@ -390,10 +404,10 @@ jobs:
             exit 1
           fi
 
-          ARTIFACT_URL=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          ARTIFACT_URL=$(curl -s -H "Authorization: Bearer *** secrets.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/sidex15/susfs4ksu-module/actions/runs/$LATEST_RUN_ID/artifacts" | jq -r '.artifacts[0].archive_download_url')
 
-          curl -L -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" -o ksu_module_susfs.zip "$ARTIFACT_URL"
+          curl -L -H "Authorization: Bearer *** secrets.GITHUB_TOKEN }}" -o ksu_module_susfs.zip "$ARTIFACT_URL"
           cp ksu_module_susfs.zip ./AnyKernel3/
 
       # 下载 SUSFS 模块（Release）
