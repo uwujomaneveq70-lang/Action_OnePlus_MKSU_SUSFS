@@ -250,8 +250,27 @@ jobs:
           done
           echo "-- 已放入的弱符号 --"
           grep -n "ksu_handle_post_execveat_sucompat" ./common/drivers/kernelsu/ksu.c ./common/fs/susfs.c 2>/dev/null | head -6 || true
-          echo "=== 修复步骤结束 ==="
+          echo "=== 7) 版本串对齐: 伪装成移植包内核的版本(否则 vendor 模块全部拒绝加载) ==="
+          sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 112/' ./common/Makefile || true
+          for MK in ./common/Makefile ./msm-kernel/Makefile; do
+            [ -f "$MK" ] && sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 112/' "$MK" || true
+          done
+          for SL in ./common/scripts/setlocalversion ./msm-kernel/scripts/setlocalversion ./external/dtc/scripts/setlocalversion; do
+            if [ -f "$SL" ]; then
+              printf '#!/bin/sh\necho "-android14-11-g75d944e80501-ab13981564"\nexit 0\n' > "$SL"
+              chmod +x "$SL"
+              echo "setlocalversion 写死 -> $SL"
+            fi
+          done
+          echo "-- Makefile 版本行 --"
+          grep -nE '^(VERSION|PATCHLEVEL|SUBLEVEL) ' ./common/Makefile | head -3 || true
+          echo "=== 8) 补移植包独有的配置项(让符号 CRC 更贴近) ==="
+          for C in CONFIG_DAMON=y CONFIG_DAMON_VADDR=y CONFIG_DAMON_SYSFS=y CONFIG_PAGE_IDLE_FLAG=y CONFIG_ARM64_SME=y; do
+            echo "$C" >> ./common/arch/arm64/configs/gki_defconfig || true
+          done
+          echo "VERFIX_DONE"
 
+          echo "=== 修复步骤结束 ==="
       - name: Apply Hide Stuff Patches
         run: |
           cd kernel_workspace/kernel_platform/common
@@ -372,8 +391,8 @@ jobs:
           cd $GITHUB_WORKSPACE
           {
             echo "### 关键检查 ###"
-            echo "-- 弱符号是否写入 --"
-            grep -n "ksu_handle_post_execveat_sucompat" kernel_workspace/kernel_platform/common/drivers/kernelsu/ksu.c 2>/dev/null | head -5 || true
+            echo "-- KernelSU 里的 sucompat hook --"
+            grep -rn "ksu_handle_post_execveat_sucompat" kernel_workspace/kernel_platform/KernelSU 2>/dev/null | head -5 || true
             echo "-- common/fs/susfs.c 尾部 --"
             tail -14 kernel_workspace/kernel_platform/common/fs/susfs.c 2>&1 || true
             echo "-- 构建日志尾部 4000 行 --"
@@ -459,7 +478,7 @@ jobs:
       - name: Download Latest SUSFS Module from CI
         if: ${{ github.event.inputs.SUSFS_CI == 'true' }}
         run: |
-          LATEST_RUN_ID=$(curl -s -H "Authorization: Bearer *** secrets.GITHUB_TOKEN }}" \
+          LATEST_RUN_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/sidex15/susfs4ksu-module/actions/runs?status=success" | \
             jq -r '.workflow_runs[] | select(.head_branch == "v1.5.2+") | .id' | head -n 1)
 
@@ -468,10 +487,10 @@ jobs:
             exit 1
           fi
 
-          ARTIFACT_URL=$(curl -s -H "Authorization: Bearer *** secrets.GITHUB_TOKEN }}" \
+          ARTIFACT_URL=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/sidex15/susfs4ksu-module/actions/runs/$LATEST_RUN_ID/artifacts" | jq -r '.artifacts[0].archive_download_url')
 
-          curl -L -H "Authorization: Bearer *** secrets.GITHUB_TOKEN }}" -o ksu_module_susfs.zip "$ARTIFACT_URL"
+          curl -L -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" -o ksu_module_susfs.zip "$ARTIFACT_URL"
           cp ksu_module_susfs.zip ./AnyKernel3/
 
       # 下载 SUSFS 模块（Release）
